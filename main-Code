@@ -1,0 +1,926 @@
+#pragma warning(disable:26451)
+#pragma warning(disable:6031)
+#pragma warning(disable:4996)
+#include<iostream>
+#include<string>
+#include<stdlib.h>
+#include<Windows.h>
+#include<cmath>
+#include<vector>
+#include<algorithm>
+#include<sstream>
+#include<thread>
+#include<conio.h>
+#include<fstream>
+#include<mutex>
+#include<set>
+#define GetKey(X) (GetAsyncKeyState(X) & 0x8000)
+#define sign(X) ((X)<0?-1:(X?1:0))
+using namespace std;
+struct ConsoleWindow {
+	ConsoleWindow(int width, int height) :W(-1), H(-1) {
+		hwnd = GetConsoleWindow();
+		GetWindowRect(hwnd, &rect);
+		x = rect.left, y = rect.top;
+		Screen_W = GetSystemMetrics(SM_CXSCREEN);//Screen_X
+		Screen_H = GetSystemMetrics(SM_CYSCREEN);//Screen_Y
+		RECT taskRect;
+		HWND taskHwnd = FindWindow("Shell_TrayWnd", NULL);
+		GetWindowRect(taskHwnd, &taskRect);
+		Task_H = taskRect.bottom - taskRect.top;
+		setSize(width, width);
+		W = width, H = height;
+	}
+	void setTitle(string title) {//引用的话，就不能直接使用字符串字面量了(临时量，非string左值对象)
+		SetConsoleTitle(title.c_str());
+	}
+	void hideMenu(void) {
+		LONG winStyle = GetWindowLong(hwnd, GWL_STYLE);
+		winStyle &= ~(WS_SYSMENU | WS_CAPTION | WS_SIZEBOX);
+		SetWindowLong(hwnd, GWL_STYLE, winStyle);
+	}
+	void hideCursor(void) {
+		CONSOLE_CURSOR_INFO cursor_info = { 1, 0 };
+		SetConsoleCursorInfo(GetStdHandle(STD_OUTPUT_HANDLE), &cursor_info);
+	}
+	void delEditMode(void) {
+		HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+		DWORD mode;
+		GetConsoleMode(hStdin, &mode);
+		mode &= ~ENABLE_QUICK_EDIT_MODE;  //移除快速编辑模式
+		mode &= ~ENABLE_INSERT_MODE;      //移除插入模式
+		//mode &= ~ENABLE_MOUSE_INPUT;
+		mode |= ENABLE_MOUSE_INPUT;
+		SetConsoleMode(hStdin, mode);
+	}
+	void addEditMode(void) {
+		HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+		DWORD mode;
+		GetConsoleMode(hStdin, &mode);
+		mode |= ENABLE_QUICK_EDIT_MODE;  //in快速编辑模式
+		mode |= ENABLE_INSERT_MODE;      //in插入模式
+		SetConsoleMode(hStdin, mode);
+	}
+	void setAlpha(BYTE alpha, COLORREF col = RGB(255, 255, 255)) {
+		SetLayeredWindowAttributes(hwnd, col, alpha, LWA_ALPHA);
+	}
+	RECT getRect() {
+		GetWindowRect(hwnd, &rect);
+		return rect;
+	}
+	void move(int X, int Y,bool Repaint = true) {
+		if (X == x && Y == y)return;
+		MoveWindow(hwnd, x = X, y = Y, W, H, Repaint);
+	}
+	void setSize(int Width,int Height, bool Repaint = true){
+		if (Width == W && Height == H)return;
+		MoveWindow(hwnd, x, y, W = Width, H = Height, Repaint);
+	}
+	static int getScreen_W(void) { return Screen_W; }
+	static int getScreen_H(void) { return Screen_H; }
+	static int getTask_H(void) { return Task_H; }
+	bool setSizeSlow(int Width, int Height, int Step = 0, bool Repaint = true) {
+		if ((Width == W && Height == H) || Step < 0)return false;
+		int w = W, h = H, sW = sign(Width - W), sH = sign(Height - H);
+		if (!Step)Step = max(abs(Width - W), abs(Height - H)) / 60.0;//auto Mode if(Use the default parameter)
+		Step = max(Step, 1);//防止0的出现
+		while (w != Width || h != Height) {
+			w = sW > 0 ? min(w + sW * Step, Width) : max(w + sW * Step, Width);
+			h = sH > 0 ? min(h + sH * Step, Height) : max(h + sH * Step, Height);
+			setSize(w, h);
+			Sleep(1);
+		}
+		return true;
+	}
+	void getFocus(void) {
+		SwitchToThisWindow(hwnd, true);
+	}
+	void setTopLayer(void) {
+		SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+	}
+	void setBottomLayer(void) {
+		SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+	}
+	HWND getHwnd(void) const{ return hwnd; }
+	bool isDowntoPoint(POINT pos) {
+		HWND Hwnd = WindowFromPoint(pos);
+		return Hwnd == hwnd;
+	}
+	void setFontSize(int Fx = 8, int Fy = 16) {
+		CONSOLE_FONT_INFOEX ConsoleCurrentFontEx;
+		ConsoleCurrentFontEx.cbSize = sizeof(CONSOLE_FONT_INFOEX);
+		ConsoleCurrentFontEx.nFont = 0;
+		ConsoleCurrentFontEx.dwFontSize.X = FontX = Fx;
+		ConsoleCurrentFontEx.dwFontSize.Y = FontY = Fy;
+		ConsoleCurrentFontEx.FontFamily = TMPF_TRUETYPE;
+		ConsoleCurrentFontEx.FontWeight = 400;
+		//wcscpy(ConsoleCurrentFontEx.FaceName, "Courier");
+		SetCurrentConsoleFontEx(GetStdHandle(STD_OUTPUT_HANDLE), FALSE, &ConsoleCurrentFontEx);
+	}
+	bool isMinic(void) { return IsIconic(hwnd); }
+	int width(void) const { return W; }
+	int height(void) const { return H; }
+	int fontX(void)const { return FontX; }
+	int fontY(void)const { return FontY; }
+	static POINT getConsoleCursorXY(void) {
+		HANDLE hStdout;
+		CONSOLE_SCREEN_BUFFER_INFO pBuffer;
+		hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+		GetConsoleScreenBufferInfo(hStdout, &pBuffer);
+		return { pBuffer.dwCursorPosition.X,pBuffer.dwCursorPosition.Y };
+	}
+	static void setConsoleCursorXY(int x,int y) {
+		CONSOLE_SCREEN_BUFFER_INFO csbiInfo;
+		HANDLE hConsoleOut;
+		hConsoleOut = GetStdHandle(STD_OUTPUT_HANDLE);
+		GetConsoleScreenBufferInfo(hConsoleOut, &csbiInfo);
+		csbiInfo.dwCursorPosition.X = x;
+		csbiInfo.dwCursorPosition.Y = y;
+		SetConsoleCursorPosition(hConsoleOut, csbiInfo.dwCursorPosition);
+	}
+	static void clearFromPoint(POINT pos,int len) {
+		static const string blank(len, ' ');
+		ConsoleWindow::setConsoleCursorXY(pos.x, pos.y);
+		cout << blank;
+		ConsoleWindow::setConsoleCursorXY(pos.x, pos.y);
+	}
+	static bool isOtherFullScreen(void) {
+		HWND Hwnd = GetForegroundWindow();
+		RECT Rect;
+		static char className[128];
+		GetWindowRect(Hwnd, &Rect);
+		GetClassName(Hwnd, className, sizeof(className));//WorkerW是桌面
+		if (strcmp(className, "WorkerW") && Rect.right - Rect.left >= Screen_W && Rect.bottom - Rect.top >= Screen_H)
+			return true;
+		return false;
+	}
+private:
+	HWND hwnd;
+	int W, H;
+	RECT rect;
+	int x, y;
+	static int Screen_W, Screen_H, Task_H;
+	int FontX, FontY;
+};
+int ConsoleWindow::Screen_W;
+int ConsoleWindow::Screen_H;
+int ConsoleWindow::Task_H;
+const int W = 50;
+const int H = 50;
+const int Extra = 60;
+ConsoleWindow win(W, H);
+struct Hook {
+	static void init(void) {
+		str = "";
+		h_key = nullptr;
+		h_mouse = nullptr;
+		startKey = false;
+		startMouse = false;
+		isStop = true;
+	}
+	static void setKeyboardHook(void) {
+		startKey = true;
+	}
+	static void setMouseHook(void) {
+		startMouse = true;
+	}
+	static void unHook(void) {
+		isStop = true;
+	}
+	static void startMsgProc(void) {
+		isStop = false;
+		thr = thread(MsgProc, std::ref(isStop));
+		thr.detach();
+	}
+	static string str;
+private:
+	static HHOOK h_key, h_mouse;
+	static bool isStop;
+	static thread thr;
+	static bool startKey, startMouse;
+	static const int Size = 25;
+	static LRESULT CALLBACK keyboardProc(int nCode, WPARAM wParam, LPARAM lParam) { //低级键盘钩子无法获取具体按键信息
+		if (wParam == 256)//放行按下消息
+			return 1;
+		KBDLLHOOKSTRUCT* pKey = (KBDLLHOOKSTRUCT*)lParam;//lParam是结构体指针(地址)
+		DWORD keycode = pKey->vkCode;//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!char导致负数 Beep崩溃！！！尼玛
+		if (str.size() >= Size || keycode == VK_SPACE)
+			str = "";
+		else if (keycode < 128) {
+			if (keycode == '\b') {
+				if (!str.empty())str.erase(str.end() - 1);
+			}
+			else
+				str += keycode;
+			Beep((keycode) * 5, keycode);
+		}
+		return 1;
+	}
+	static LRESULT CALLBACK mouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+		return 1;
+	}
+	static void MsgProc(bool& isStop) {//每个线程独立消息循环 所以必须在同一线程内设置MSG & HOOK
+		if (!startKey && !startMouse)return;
+		if (startKey)
+			h_key = SetWindowsHookEx(WH_KEYBOARD_LL, keyboardProc, GetModuleHandle(NULL), 0);
+		if (startMouse)
+			h_mouse = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, GetModuleHandle(NULL), 0);
+		MSG msg;	//不可漏掉消息处理，不然程序会卡死
+		while (!isStop) {
+			HWND hwnd = FindWindow(NULL, "任务管理器");
+			if (hwnd)
+				SwitchToThisWindow(GetConsoleWindow(), true);//本程序取得焦点，否则任务管理器逃脱
+			if (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE))
+				TranslateMessage(&msg), DispatchMessageW(&msg), printf("2");
+			else
+				Sleep(0);    //避免CPU全负载运行
+		}
+		if (startKey)
+			UnhookWindowsHookEx(h_key);
+		if (startMouse)
+			UnhookWindowsHookEx(h_mouse);
+	}
+};
+string Hook::str;
+HHOOK Hook::h_key = nullptr;
+HHOOK Hook::h_mouse = nullptr;
+bool Hook::startKey = false;
+bool Hook::startMouse = false;
+bool Hook::isStop = true;
+thread Hook::thr;
+struct Command {
+	string code;
+	string filename;
+	string parameter;
+};
+struct CommandExcutor {
+	void excute(string str) {
+		if (str == "")return;
+		transform(str.begin(), str.end(), str.begin(), tolower);
+		auto tokens = getTokens(str);
+		if (tokens[0] == "open") {
+			size_t pos = str.find_first_of(' ');
+			if(pos!=string::npos)
+				ShellExecute(0, "open", str.substr(pos+1).c_str(), "", "", SW_SHOWNORMAL);
+			return;
+		}
+		if (str == "lock") {
+			lockCursor();
+			return;
+		}
+		for (auto cmd : CMD)
+			if (cmd.code.find(str)!=string::npos) { //子集
+				ShellExecute(0, "open", cmd.filename.c_str(), cmd.parameter.c_str(), "", SW_SHOWNORMAL);
+				return;
+			}
+		system(("cmd /c " + str).c_str());//直接转发cmd
+	}
+	void checkLockState(void) {
+		bool isLock = readLockState(LockStatePath);
+		if (isLock)lockCursor();
+	}
+private:
+	bool isNum(string str) {
+		for (auto c : str)
+			if (!isdigit(c))
+				return false;
+		return true;
+	}
+	vector<string> getTokens(const string &str) {
+		vector<string>v;
+		string token;
+		istringstream iss(str);
+		while (iss >> token)
+			v.push_back(token);
+		return v;
+	}
+	static void showLockInfo(void)
+	{
+		system("cls");
+		printf("The Computer has been Locked.\n");
+		printf("The advice is: Keeping away.\n");
+		printf("Or\n");
+		printf("Input Password: ");
+	}
+	void lockCursor(void) {
+		writeLockState(LockStatePath, true);
+		win.setSizeSlow(360, 100, 5);
+		Hook::init();//记得初始化
+		Hook::setKeyboardHook();
+		Hook::setMouseHook();
+		Hook::startMsgProc();
+		showLockInfo();
+		POINT pos = ConsoleWindow::getConsoleCursorXY();
+		while (true) {
+			ConsoleWindow::clearFromPoint(pos, 25);
+			printf("%s", Hook::str.c_str());
+			if (Hook::str == "MRBEANCPP") {
+				printf("\nUnlocked\n"), Sleep(1000);
+				Hook::unHook();
+				break;
+			}
+			Sleep(5);
+		}
+		writeLockState(LockStatePath, false);
+	}
+	const string browser = "D:\\Program Files (x86)\\360Chrome\\Chrome\\Application\\360chrome.exe";
+	const string browser_G = "C:\\Users\\18134\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe";
+	const string LockStatePath = "C:\\Users\\18134\\source\\repos\\Windows's in Windows\\LockState.data";
+	const string Lock = "Lock";
+	const string Unlock = "Unlock";
+	void writeLockState(const string path, bool isLock) {
+		ofstream ofs(path);
+		ofs << (isLock ? Lock : Unlock);
+	}
+	bool readLockState(const string path) {
+		ifstream ifs(path);
+		if (!ifs)return false;
+		string str;
+		ifs >> str;
+		return str == Lock;
+	}
+	vector<Command> CMD = {//start用于开启另一个控制台程序 否则winmine会代替follower本体!
+		{"cmd","cmd.exe",""},
+		{"taskmgr","taskmgr.exe",""},
+		{"notepad","notepad.exe",""},
+		{"code","C:\\Users\\18134\\source\\repos",""},
+		{"game","C:\\Users\\18134\\Documents\\#LGDMS",""},
+		{"vs","D:\\Visial Studio 2019\\Common7\\IDE\\devenv.exe",""},
+		{"pycharm", "D:\\Pycharm\\PyCharm Community Edition 2019.3.3\\bin\\pycharm64.exe",""},
+		{"music","D:\\CloudMusic\\cloudmusic.exe",""},
+		{"kugou","D:\\Program Files (x86)\\KuGou2012\\KuGou.exe",""},
+		{"qq","D:\\Program Files (x86)\\Tencent\\QQ\\Bin\\QQScLauncher.exe",""},
+		{"winmine","C:\\Users\\18134\\Documents\\#LGDMS\\WinMine.exe",""},
+		{"documents","C:\\Users\\18134\\Documents\\",""},
+		{"bilibili",browser ,"www.bilibili.com"},
+		{"translator",browser ,"fanyi.baidu.com"},
+		{"chrome",browser_G,"www.baidu.com"} };
+};
+struct Note {
+	void add(string& str) { notes.push_back(str); maxLen = max(maxLen, str.length()); }
+	void del(size_t index) {
+		if (index > notes.size())return;
+		if (index)
+			notes.erase(notes.begin() + index - 1);
+		else
+			notes.clear();
+	}
+	void show(void) {
+		printf("Note:\n");
+		int i = 1;
+		for (auto str : notes)
+			printf("%d.%s\n", i++, str.c_str());
+	}
+	size_t num(void) { return notes.size(); }
+	size_t maxlen(void) { return maxLen + countNum(num()) + 1; }
+private:
+	size_t maxLen = 0;
+	vector<string>notes;
+	int countNum(int n) {
+		int cnt = 1;
+		while (n >= 10)
+			n /= 10, cnt++;
+		return cnt;
+	}
+};
+struct FileLib {
+	static string getFileName(const string& filepath) {
+		size_t pos = filepath.find_last_of('\\');
+		if (pos == string::npos)return "";
+		return filepath.substr(pos + 1);
+	}
+	static string getSuffix(const string& filepath) {
+		size_t pos = filepath.find_last_of('.');
+		if (pos == string::npos)return "NODOT";
+		string suffix = filepath.substr(pos + 1);
+		transform(suffix.begin(), suffix.end(), suffix.begin(), tolower);
+		return suffix;
+	}
+	void getSuffixPath(const string& suffixpath) {
+		suffixPath = suffixpath;
+	}
+	void builtFileLib(void) {
+		if (!readSuffix())return;
+		DWORD disk = GetLogicalDrives(); //位图值
+		int i = 0;
+		while (disk) {
+			if (disk & 1)
+				thr_build[i] = thread(searchDisk, i + 'A', std::ref(threadNum), std::ref(suffixs), std::ref(Filelib)), thr_build[i].detach();
+			disk >>= 1, i++;
+		}
+		Sleep(500);
+	}
+	void startFileWatcher(void) {
+		if (!readSuffix() || isWatching)return;
+		DWORD disk = GetLogicalDrives(); //位图值
+		int i = 0;
+		while (disk) {
+			if (disk & 1)
+				thr_watcher[i] = thread(fileWatcher, i + 'A', std::ref(suffixs), std::ref(Filelib)), thr_watcher[i].detach();
+			disk >>= 1, i++;
+		}
+		isWatching = true;
+	}
+	bool allBuildFinsih(void) {
+		return !threadNum;
+	}
+	size_t fileNum(void) {
+		return Filelib.size();
+	}
+	vector<int> stringToVecInt(const string& str) {
+		union {
+			char c[2];
+			int  i;
+		} convert;
+		convert.i = 0;
+		vector<int> vec;
+		int len = str.length();
+		for (int i = 0; i < len; i++) {
+			if ((unsigned)str[i] > 0x80) {// GBK编码首字符大于0x80
+				// 利用union进行转化，注意是大端序//这不重要吧 两者进行相同转换（大概）
+				convert.c[1] = str[i];
+				convert.c[0] = str[i + 1];
+				vec.push_back(convert.i);
+				i++;
+			}
+			else
+				vec.push_back(str[i]);// 小于0x80，为ASCII编码，一个字节
+		}
+		return vec;
+	}
+	static bool findChinese(const string& str) {
+		return find_if(str.begin(), str.end(), [](const char ch) {return (unsigned)ch > 0x80; }) != str.end();
+	}
+	static void Tolower(string& str) {
+		transform(str.begin(), str.end(), str.begin(), [](const char ch) {return (unsigned)ch <= 0x80 ? tolower(ch) : ch; });
+	}
+	bool strFind(const string& sourse, const string& tofind) {//处理中文匹配问题
+		if (!findChinese(sourse) || !findChinese(tofind))
+			return sourse.find(tofind) != string::npos;
+		auto sour = stringToVecInt(sourse);
+		auto find = stringToVecInt(tofind);
+		return std::search(sour.begin(), sour.end(), find.begin(), find.end()) != sour.end();
+	}
+	vector<string> search(const string& keyline) {
+		vector<string>files;
+		istringstream iss(keyline);
+		vector<string>keywords;
+		string str;
+		while (iss >> str)//多关键词
+			Tolower(str), keywords.push_back(str);
+		for (auto iter = Filelib.begin(); iter != Filelib.end(); iter++) {
+			string filename = getFileName(*iter);
+			Tolower(filename);//忽略大小写
+			bool flag = false;
+			for (auto tofind : keywords) {
+				if (!strFind(filename, tofind)) {
+					flag = true;
+					break;
+				}
+			}
+			if (flag)continue;
+			files.push_back(*iter);
+		}
+		return files;
+	}
+	bool isWatching = false;
+private:
+	multiset<string>Filelib;
+	int threadNum = 0;
+	string suffixPath;
+	set<string>suffixs;
+	thread thr_build[15];
+	thread thr_watcher[15];
+	static mutex mut;
+	bool readSuffix(void) {
+		ifstream ifs(suffixPath);
+		if (!ifs)return false;
+		string suf;
+		while (ifs >> suf)
+			suffixs.insert(suf);
+		return true;
+	}
+	static bool suffixCheck(const string& filepath, set<string>& suffixs) {
+		if (suffixs.find(getSuffix(filepath)) != suffixs.end())
+			return true;
+		return false;
+	}
+	static void searchDisk(char disk, int& threadNum, set<string>& suffixs, multiset<string>& lib) {
+		threadNum++;
+		string cmd = string("cmd /c dir /B /S /A:-D ") + disk + ":\\";
+		char buff[1024];
+		FILE* pipe;//打开管道 链接cmd 直接读取输出 like fopen
+		pipe = _popen(cmd.c_str(), "r");
+		if (!pipe)return;
+		while (fgets(buff, sizeof(buff), pipe)) {
+			string filepath(buff);
+			filepath.erase(filepath.end() - 1);
+			mut.lock();
+			if (suffixCheck(filepath, suffixs))
+				lib.insert(filepath);
+			mut.unlock();
+		}
+		_pclose(pipe);//关闭管道
+		//printf("%c Down\n", disk);
+		threadNum--;
+	}
+	static void fileWatcher(char disk, set<string>& suffixs, multiset<string>& lib) {//监测文件夹变化
+		const int Max_Path = 1024;
+		const int Buf_Size = 1096;
+		char filename[Max_Path] = { '\0' };//文件名
+		char newfilename[Max_Path] = { '\0' }; //文件重命名后的名字
+		char notify[Buf_Size] = { '\0' };
+		char dir[25];
+		sprintf(dir, "%c:\\", disk);
+		DWORD cbBytes;
+		HANDLE dirHandle = CreateFileA(dir, GENERIC_READ | GENERIC_WRITE | FILE_LIST_DIRECTORY,
+			FILE_SHARE_READ | FILE_SHARE_WRITE,
+			NULL,
+			OPEN_EXISTING,
+			FILE_FLAG_BACKUP_SEMANTICS,
+			NULL);
+		if (dirHandle == INVALID_HANDLE_VALUE) { //若网络重定向或目标文件系统不支持该操作，函数失败，同时调用GetLastError()返回ERROR_INVALID_FUNCTION
+			cout << "Error" + GetLastError() << endl;
+			throw runtime_error("fileWatcher:CreateFileA Err!");
+			return;
+		}
+		FILE_NOTIFY_INFORMATION* pnotify = (FILE_NOTIFY_INFORMATION*)notify;
+		while (true)
+		{		//阻塞
+			if (ReadDirectoryChangesW(dirHandle, &notify, Buf_Size, true,
+				FILE_NOTIFY_CHANGE_FILE_NAME |
+				FILE_NOTIFY_CHANGE_DIR_NAME
+				| FILE_NOTIFY_CHANGE_SIZE,
+				&cbBytes, NULL, NULL))
+			{
+				string sFilename, sNewFilename;
+				//转换文件名为多字节字符串
+				if (pnotify->FileName) {
+					memset(filename, '\0', sizeof(filename));
+					WideCharToMultiByte(CP_ACP, 0, pnotify->FileName, pnotify->FileNameLength / 2, filename, sizeof(filename), NULL, NULL);
+					sFilename = string(dir) + filename;
+				}
+				//获取重命名的文件名
+				if (pnotify->NextEntryOffset != 0 && (pnotify->FileNameLength > 0 && pnotify->FileNameLength < Max_Path)) {
+					PFILE_NOTIFY_INFORMATION p = (PFILE_NOTIFY_INFORMATION)((char*)pnotify + pnotify->NextEntryOffset);
+					memset(newfilename, '\0', sizeof(newfilename));
+					WideCharToMultiByte(CP_ACP, 0, p->FileName, p->FileNameLength / 2, newfilename, sizeof(newfilename), NULL, NULL);
+					sNewFilename = string(dir) + newfilename;
+				}
+				//设置类型过滤器,监听文件创建、更改、删除、重命名等
+				set<string>::iterator iter;
+				mut.lock();
+				switch (pnotify->Action) {
+				case FILE_ACTION_ADDED:
+					if (!suffixCheck(sFilename, suffixs))break;
+					lib.insert(sFilename);
+					break;
+				case FILE_ACTION_REMOVED:
+					if (!suffixCheck(sFilename, suffixs))break;
+					iter = lib.find(sFilename);
+					if (iter != lib.end())
+						lib.erase(iter);
+					break;
+				case FILE_ACTION_RENAMED_OLD_NAME:
+					if (!suffixCheck(sFilename, suffixs))break;
+					iter = lib.find(sFilename);
+					if (iter != lib.end())
+						lib.erase(iter);
+					if (!suffixCheck(sNewFilename, suffixs))break;
+					lib.insert(sNewFilename);
+					break;
+				}
+				mut.unlock();
+			}
+		}
+		CloseHandle(dirHandle);
+	}
+};
+mutex FileLib::mut;
+struct InputMethod {//切换输入法
+	InputMethod() {
+		hkl = LoadKeyboardLayout("0x0409", KLF_ACTIVATE);//EN
+	}
+	void setEnglishMode(HWND hwnd) {
+		PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, (WPARAM)TRUE, (LPARAM)hkl);
+	}
+	void checkAndSetEn(void) {
+		static char title[256];
+		HWND hwnd = GetForegroundWindow();
+		GetWindowText(hwnd, title, sizeof(title));
+		if (isInList(title) && lastHwnd != hwnd)
+			setEnglishMode(hwnd);
+		lastHwnd = hwnd;
+	}
+private:
+	HKL hkl;
+	HWND lastHwnd = NULL;
+	set<string>list = {//tolower
+		"visual studio",
+		"dev",
+		"pycharm",
+		"qt creator"
+	};
+	bool isInList(string title) {
+		transform(title.begin(), title.end(), title.begin(), tolower);
+		for (auto str : list)
+			if (title.find(str) != string::npos)
+				return true;
+		return false;
+	}
+};
+struct Time {
+	Time() { setTime(); }
+	Time(int h, int m, int s) { setTime(h, m, s); }
+	void setTime(int h, int m, int s) {
+		hour = h, minute = m, second = s;
+	}
+	void setTime(void) {
+		GetLocalTime(&systime);
+		hour = systime.wHour;
+		minute = systime.wMinute;
+		second = systime.wSecond;
+	}
+	UINT toSeconds(void) const {//From 0:0:0
+		return hour * 60 * 60 + minute * 60 + second;
+	}
+	friend bool operator<(const Time& t1, const Time& t2);
+	friend int operator-(const Time& t1, const Time& t2);
+	friend UINT distance(const Time& t1, const Time& t2);
+private:
+	SYSTEMTIME systime;
+	int hour, minute, second;
+};
+bool operator<(const Time& t1, const Time& t2) {//顺时针 12 hours 以内为true
+	const UINT total = 60 * 60 * 24;//Seconds
+	UINT dis = distance(t1, t2);
+	return dis < total / 2;//12 hours
+}
+int operator-(const Time& t1, const Time& t2) {//Seconds
+	return t1.toSeconds() - t2.toSeconds();
+}
+UINT distance(const Time& t1, const Time& t2) {//顺时针距离 (Seconds)
+	const UINT total = 60 * 60 * 24;//Seconds
+	return (t2 - t1 + total) % total;
+}
+inline char Input(void);
+void strInputProc(string& str, bool& isfinish);
+inline size_t sleep(DWORD MiliSec);
+void GetMouseRollState(int& RollState,bool& wrok);
+inline void KeySend(BYTE bVK);
+inline void PostWindowKey(BYTE bVK, HWND hwnd);
+int main(void)
+{
+	win.setTitle("[Follower] by MrBeanC");
+	win.hideMenu();
+	win.delEditMode();
+	win.hideCursor();
+	win.setAlpha(200);
+	win.setFontSize();
+	RECT rect = win.getRect();
+
+	double x = rect.left, y = rect.top;
+	double dx = 1, dy = 1;
+	int moveDis = 0;
+	int Screen_W = win.getScreen_W(), Screen_H = win.getScreen_H(), Task_H = win.getTask_H();
+	POINT pos;
+	CommandExcutor cmdEx;
+	string showstr = "I Catch You";
+	Note note;
+	cmdEx.checkLockState();
+	const int Gap = 5;//ms
+	int RollState = 0;
+	bool RollCheckWork = false;
+	thread MouseRollCheck(GetMouseRollState, std::ref(RollState),std::ref(RollCheckWork));
+	MouseRollCheck.detach();
+
+	FileLib filelib;
+	filelib.getSuffixPath("C:\\Users\\18134\\source\\repos\\Windows's in Windows\\suffix.txt");
+	filelib.builtFileLib();
+
+	InputMethod inputM;
+	while (true) {
+		win.move(x, y, false);
+		GetCursorPos(&pos);
+		if (GetKey(VK_MBUTTON) && !win.isDowntoPoint(pos) && !win.isOtherFullScreen()) {
+			RollCheckWork = true;
+			x = pos.x - W / 2, y = pos.y - H / 2;
+			win.move(x, y);
+			win.getFocus();
+			Sleep(150);
+			win.getFocus();
+			continue;
+		}
+		int Dx = pos.x - (x + W / 2), Dy = pos.y - (y + H / 2), lim = 10;
+		double dis = sqrt(Dx * Dx + Dy * Dy);//distance
+		if (!dx && !dy && pos.x >= x && pos.x <= x + win.width() && pos.y >= y && pos.y <= y + win.height())
+			dis = 0;
+		if (dis < lim) {
+			dx = dy = 0;
+			inputM.setEnglishMode(win.getHwnd());
+			RollCheckWork = true;			//速度方面修改为根据width height自动调整!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1
+			if (win.setSizeSlow(W + Extra, H)) {//*1
+				Time now;
+				if (Time(0,0,0)<now && now<Time(6,0,0))
+					showstr = "Time to bed";
+				system("cls"), printf("%d\n%s\n", moveDis, showstr.c_str()), win.hideCursor();
+				win.delEditMode();//system("cls")会破坏delEditMode()
+			}
+			if ((GetKey(VK_LBUTTON) || GetKey(VK_SPACE)) && win.isDowntoPoint(pos)) {//VK_LBUTTON************************************
+				RollCheckWork = false;
+				system("cls");
+				win.setSizeSlow(W + Extra * 2, H, 1);
+				string str;
+				bool isfinish = false, isFree = false, isCancel = false;
+				thread thr(strInputProc, std::ref(str), std::ref(isfinish));
+				thr.detach();
+				while (!isfinish) {
+					if (GetKey(VK_LBUTTON)) {
+						if (!isFree)continue;
+						PostWindowKey(VK_RETURN, win.getHwnd());//硬核模拟
+						isCancel = true;
+					}
+					else if (GetKey(VK_MBUTTON)) {//Win+D//紧急避险
+						if (!isFree)continue;
+						keybd_event(VK_LWIN, 0, 0, 0);
+						keybd_event('D', 0, 0, 0);
+						keybd_event('D', 0, KEYEVENTF_KEYUP, 0);
+						keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0);
+						isFree = false;
+					}
+					else
+						isFree = true;//松开按键，防止长按鬼畜
+					Sleep(1);
+				}
+				if (isCancel)str = "";
+				str.erase(0, str.find_first_not_of(" "));//del前导空格
+				cmdEx.excute(str);
+			}
+			else if (GetKey(VK_MBUTTON) && win.isDowntoPoint(pos)) {//VK_MBUTTON***************************************************
+				RollCheckWork = false;
+				auto showNote = [&]() {
+					system("cls");			   // + 1为了区别Normal模式，方便还原*1
+					win.setSizeSlow(max(W + Extra + 1, (note.maxlen() + 3) * win.fontX()), max(H, (note.num() + 2) * win.fontY()), 1);
+					note.show();
+				};
+				showNote();
+				while (true) {
+					string str;
+					bool isfinish = false, isFree = false, isCancel = false;
+					thread thr(strInputProc, std::ref(str), std::ref(isfinish));
+					thr.detach();
+					while (!isfinish) {
+						if (GetKey(VK_MBUTTON)) {
+							if (!isFree)continue;
+							PostWindowKey(VK_RETURN, win.getHwnd());//硬核模拟
+							isCancel = true;
+						}
+						else
+							isFree = true;//松开按键，防止长按鬼畜
+						Sleep(1);
+					}
+					if (isCancel) {
+						Sleep(200);
+						break;
+					}
+					string token;
+					istringstream iss(str);
+					iss >> token;
+					if (token == "del") {
+						int index = -1;
+						if (iss >> index)note.del(index);
+					}
+					else
+						note.add(str);
+					showNote();
+				}
+			}
+			else if (GetKey(VK_RBUTTON) && win.isDowntoPoint(pos)) {//VK_RBUTTON*****************************************************
+				RollCheckWork = false;
+				win.addEditMode();
+				if (!filelib.isWatching) {
+					system("cls");
+					cout << "Preparing..";
+					win.delEditMode();
+					continue;
+				}
+				system("cls");
+				const int searchMode_W = 120 * win.fontX(), searchMode_H = 30 * win.fontY();
+				win.move(x = (Screen_W / 2 - searchMode_W / 2), y = (Screen_H / 2 - searchMode_H / 2) - 100);
+				win.setSizeSlow(searchMode_W, searchMode_H);
+				string line;
+				while (true) {
+					bool isfinish = false, isFree = false, isCancel = false;
+					thread thr(strInputProc, std::ref(line), std::ref(isfinish));
+					thr.detach();
+					while (!isfinish) {
+						GetCursorPos(&pos);
+						if (GetKey(VK_RBUTTON) && win.isDowntoPoint(pos)) {
+							if (!isFree)continue;
+							PostWindowKey(VK_RETURN, win.getHwnd());//硬核模拟
+							fflush(stdin);
+							isCancel = true;
+						}
+						else
+							isFree = true;//松开按键，防止长按鬼畜
+						Sleep(1);
+					}
+					if (isCancel) {
+						Sleep(200);
+						break;
+					}
+					double begin = clock();
+					auto files = filelib.search(line);
+					system("cls");
+					cout << "\n\n";
+					for (auto filepath : files) {
+						cout << filepath << '\n';
+						if (GetKey(VK_RBUTTON) && win.isDowntoPoint(pos)) {
+							cout << "Force Stop...\n";
+							break;
+						}
+					}
+					cout << "Total: " << files.size() << '\n';
+					printf("Cost Time: %.2fs\n", (clock() - begin) / CLOCKS_PER_SEC);
+					ConsoleWindow::setConsoleCursorXY(0, 0);
+					string blank(line.length(), ' ');
+					cout << blank;
+					ConsoleWindow::setConsoleCursorXY(0, 1);
+					cout << "[" << line << "]";
+					ConsoleWindow::setConsoleCursorXY(0, 0);
+				}
+				win.delEditMode();
+			}
+			if (RollState > 0)
+				KeySend(VK_VOLUME_UP);
+			else if (RollState < 0)
+				KeySend(VK_VOLUME_DOWN);
+		}
+		else {
+			RollCheckWork = false;
+			dx = Dx / dis, dy = Dy / dis;
+			if (win.width() != W || win.height() != H)
+				system("cls");
+			if(win.setSizeSlow(W, H, 2))
+				win.hideCursor();
+		}
+		if ((x <= 0 && dx < 0) || (x + W >= Screen_W && dx > 0))
+			dx = 0;
+		if ((y <= 0 && dy < 0) || (y + H >= Screen_H - Task_H && dy > 0))
+			dy = 0;
+		if (dx || dy)moveDis++;
+		double t = sleep(Gap);
+		dx *= t / Gap, dy *= t / Gap;
+		x += dx, y += dy;
+		if (filelib.allBuildFinsih() && !filelib.isWatching)
+			filelib.startFileWatcher(), filelib.isWatching = true;
+		inputM.checkAndSetEn();//切换输入法
+	}
+	system("pause");
+	return 0;
+}
+inline char Input(void) {
+	return _kbhit() ? _getch() : '\0';
+}
+void strInputProc(string& str, bool& isfinish) {//Not Only English
+	isfinish = false;
+	cin.clear();
+	getline(cin, str);
+	fflush(stdin);
+	isfinish = true;
+}
+inline size_t sleep(DWORD MiliSec) {//获取精确Sleep时长（貌似不怎么精确...）
+	double begin = clock();
+	Sleep(MiliSec);
+	return (clock() - begin) / CLOCKS_PER_SEC * 1000;
+}
+void GetMouseRollState(int &RollState,bool &work) {
+	HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+	INPUT_RECORD mouseRec;
+	DWORD res;
+	while (true) {
+		static POINT pos;
+		GetCursorPos(&pos);
+		if (win.isDowntoPoint(pos) && work)
+			win.getFocus();//需要取得焦点才能读取鼠标输入
+		else {
+			this_thread::sleep_for(std::chrono::milliseconds(200));
+			continue;
+		}
+		ReadConsoleInput(hIn, &mouseRec, 1, &res);
+		FlushConsoleInputBuffer(hIn);//防止堆积消息造成未响应
+		if (mouseRec.Event.MouseEvent.dwEventFlags == MOUSE_WHEELED)
+			RollState = (int)mouseRec.Event.MouseEvent.dwButtonState;
+		else
+			RollState = 0;
+		this_thread::sleep_for(std::chrono::milliseconds(2));
+	}
+}
+inline void KeySend(BYTE bVK) {
+	keybd_event(bVK, 0, 0, 0);
+	keybd_event(bVK, 0, KEYEVENTF_KEYUP, 0);
+}
+inline void PostWindowKey(BYTE bVK,HWND hwnd) {
+	PostMessage(hwnd, WM_KEYDOWN, VK_RETURN, 1);
+	PostMessage(hwnd, WM_KEYUP, VK_RETURN, 1);
+}
